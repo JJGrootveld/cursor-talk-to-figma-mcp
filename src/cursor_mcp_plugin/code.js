@@ -125,6 +125,10 @@ async function handleCommand(command, params) {
       return await createRectangle(params);
     case "create_frame":
       return await createFrame(params);
+    case "create_section":
+      return await createSection(params);
+    case "append_child":
+      return await appendChildToNode(params);
     case "create_text":
       return await createText(params);
     case "set_fill_color":
@@ -233,6 +237,14 @@ async function handleCommand(command, params) {
       return await setFocus(params);
     case "set_selections":
       return await setSelections(params);
+    case "get_local_variables":
+      return await getLocalVariables(params);
+    case "get_local_variable_collections":
+      return await getLocalVariableCollections();
+    case "apply_variable_to_node":
+      return await applyVariableToNode(params);
+    case "apply_variables_to_nodes":
+      return await applyVariablesToNodes(params);
     default:
       throw new Error(`Unknown command: ${command}`);
   }
@@ -803,6 +815,89 @@ async function createFrame(params) {
     layoutMode: frame.layoutMode,
     layoutWrap: frame.layoutWrap,
     parentId: frame.parent ? frame.parent.id : undefined,
+  };
+}
+
+async function createSection(params) {
+  const {
+    x = 0,
+    y = 0,
+    width = 500,
+    height = 300,
+    name = "Section",
+    fillColor,
+  } = params || {};
+
+  const section = figma.createSection();
+  section.x = x;
+  section.y = y;
+  section.resizeWithoutConstraints(width, height);
+  section.name = name;
+
+  // Set fill color if provided
+  if (fillColor) {
+    const paintStyle = {
+      type: "SOLID",
+      color: {
+        r: parseFloat(fillColor.r) || 0,
+        g: parseFloat(fillColor.g) || 0,
+        b: parseFloat(fillColor.b) || 0,
+      },
+      opacity: parseFloat(fillColor.a) || 1,
+    };
+    section.fills = [paintStyle];
+  }
+
+  // Sections can only be direct children of a page
+  figma.currentPage.appendChild(section);
+
+  return {
+    id: section.id,
+    name: section.name,
+    x: section.x,
+    y: section.y,
+    width: section.width,
+    height: section.height,
+    fills: section.fills,
+  };
+}
+
+async function appendChildToNode(params) {
+  const { parentId, childId } = params || {};
+
+  if (!parentId) {
+    throw new Error("parentId is required");
+  }
+  if (!childId) {
+    throw new Error("childId is required");
+  }
+
+  const parentNode = await figma.getNodeByIdAsync(parentId);
+  if (!parentNode) {
+    throw new Error(`Parent node not found with ID: ${parentId}`);
+  }
+
+  const childNode = await figma.getNodeByIdAsync(childId);
+  if (!childNode) {
+    throw new Error(`Child node not found with ID: ${childId}`);
+  }
+
+  // Check if parent supports appendChild
+  if (!("appendChild" in parentNode)) {
+    throw new Error(`Parent node (${parentNode.type}) does not support children`);
+  }
+
+  // Perform the reparenting
+  parentNode.appendChild(childNode);
+
+  return {
+    success: true,
+    parentId: parentNode.id,
+    parentName: parentNode.name,
+    parentType: parentNode.type,
+    childId: childNode.id,
+    childName: childNode.name,
+    childType: childNode.type,
   };
 }
 
@@ -4025,4 +4120,469 @@ async function setSelections(params) {
     notFoundIds: notFoundIds,
     message: `Selected ${nodes.length} nodes${notFoundIds.length > 0 ? ` (${notFoundIds.length} not found)` : ''}`
   };
+}
+
+// Variable-related functions
+
+/**
+ * Get local variables from the current file
+ * @param {Object} params - Optional parameters
+ * @param {string} [params.type] - Optional filter by variable type (BOOLEAN, FLOAT, STRING, COLOR)
+ * @returns {Object} Object containing success status, variable collections, and variables
+ */
+async function getLocalVariables(params = {}) {
+  try {
+    // Get all local variable collections
+    const collections = await figma.variables.getLocalVariableCollectionsAsync();
+
+    // Get all local variables, optionally filtered by type
+    const variables = params.type
+      ? await figma.variables.getLocalVariablesAsync(params.type)
+      : await figma.variables.getLocalVariablesAsync();
+
+    // Build collection map for easier lookup
+    const collectionMap = {};
+    for (const collection of collections) {
+      collectionMap[collection.id] = {
+        id: collection.id,
+        name: collection.name,
+        modes: collection.modes.map(mode => ({
+          modeId: mode.modeId,
+          name: mode.name
+        })),
+        defaultModeId: collection.defaultModeId,
+        variableIds: collection.variableIds
+      };
+    }
+
+    // Format variables with their values
+    const formattedVariables = variables.map(variable => {
+      const collection = collectionMap[variable.variableCollectionId];
+
+      // Get values for each mode
+      const valuesByMode = {};
+      for (const modeId in variable.valuesByMode) {
+        const value = variable.valuesByMode[modeId];
+        const mode = collection && collection.modes ? collection.modes.find(m => m.modeId === modeId) : null;
+        valuesByMode[modeId] = {
+          value: value,
+          modeName: mode ? mode.name : modeId
+        };
+      }
+
+      return {
+        id: variable.id,
+        name: variable.name,
+        key: variable.key,
+        variableCollectionId: variable.variableCollectionId,
+        collectionName: collection ? collection.name : 'Unknown Collection',
+        resolvedType: variable.resolvedType,
+        valuesByMode: valuesByMode,
+        scopes: variable.scopes,
+        hiddenFromPublishing: variable.hiddenFromPublishing,
+        description: variable.description
+      };
+    });
+
+    return {
+      success: true,
+      message: `Found ${variables.length} variable(s) in ${collections.length} collection(s)`,
+      collections: Object.values(collectionMap),
+      variables: formattedVariables,
+      count: variables.length
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: `Error getting local variables: ${error.message}`,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Get all local variable collections
+ * @returns {Object} Object containing success status and collections
+ */
+async function getLocalVariableCollections() {
+  try {
+    const collections = await figma.variables.getLocalVariableCollectionsAsync();
+
+    const formattedCollections = collections.map(collection => ({
+      id: collection.id,
+      name: collection.name,
+      key: collection.key,
+      modes: collection.modes.map(mode => ({
+        modeId: mode.modeId,
+        name: mode.name
+      })),
+      defaultModeId: collection.defaultModeId,
+      variableIds: collection.variableIds,
+      variableCount: collection.variableIds.length
+    }));
+
+    return {
+      success: true,
+      message: `Found ${collections.length} variable collection(s)`,
+      collections: formattedCollections,
+      count: collections.length
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: `Error getting variable collections: ${error.message}`,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Apply a variable to a node property
+ * @param {Object} params - Parameters for applying variable
+ * @param {string} params.nodeId - ID of the node to apply variable to
+ * @param {string} params.variableId - ID of the variable to apply
+ * @param {string} params.property - Property to bind the variable to (e.g., 'fills', 'width', 'height', 'cornerRadius')
+ * @param {number} [params.fieldIndex] - Optional index for array properties like fills/strokes (default: 0)
+ * @returns {Object} Object containing success status and details
+ */
+async function applyVariableToNode(params) {
+  try {
+    if (!params.nodeId) {
+      throw new Error("Missing required parameter: nodeId");
+    }
+    if (!params.variableId) {
+      throw new Error("Missing required parameter: variableId");
+    }
+    if (!params.property) {
+      throw new Error("Missing required parameter: property");
+    }
+
+    // Get the node
+    const node = await figma.getNodeByIdAsync(params.nodeId);
+    if (!node) {
+      throw new Error(`Node not found with ID: ${params.nodeId}`);
+    }
+
+    // Get the variable
+    const variable = await figma.variables.getVariableByIdAsync(params.variableId);
+    if (!variable) {
+      throw new Error(`Variable not found with ID: ${params.variableId}`);
+    }
+
+    // Apply the variable based on property type
+    const property = params.property.toLowerCase();
+    const fieldIndex = params.fieldIndex || 0;
+
+    // Handle different property types
+    if (property === 'fills' || property === 'fill') {
+      if (!('fills' in node)) {
+        throw new Error(`Node type ${node.type} does not support fills`);
+      }
+      if (variable.resolvedType !== 'COLOR') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with fills (expected COLOR)`);
+      }
+
+      // Ensure node has at least one fill
+      if (!node.fills || node.fills.length === 0) {
+        node.fills = [{ type: 'SOLID', color: { r: 0, g: 0, b: 0 } }];
+      }
+
+      // Clone fills array to avoid mutating the original
+      const fillsCopy = JSON.parse(JSON.stringify(node.fills));
+      // Bind variable to the first fill's color
+      fillsCopy[fieldIndex] = figma.variables.setBoundVariableForPaint(fillsCopy[fieldIndex], 'color', variable);
+      node.fills = fillsCopy;
+
+    } else if (property === 'strokes' || property === 'stroke') {
+      if (!('strokes' in node)) {
+        throw new Error(`Node type ${node.type} does not support strokes`);
+      }
+      if (variable.resolvedType !== 'COLOR') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with strokes (expected COLOR)`);
+      }
+
+      // Ensure node has at least one stroke
+      if (!node.strokes || node.strokes.length === 0) {
+        node.strokes = [{ type: 'SOLID', color: { r: 0, g: 0, b: 0 } }];
+      }
+
+      // Clone strokes array to avoid mutating the original
+      const strokesCopy = JSON.parse(JSON.stringify(node.strokes));
+      // Bind variable to the first stroke's color
+      strokesCopy[fieldIndex] = figma.variables.setBoundVariableForPaint(strokesCopy[fieldIndex], 'color', variable);
+      node.strokes = strokesCopy;
+
+    } else if (property === 'width') {
+      if (!('width' in node)) {
+        throw new Error(`Node type ${node.type} does not support width`);
+      }
+      if (variable.resolvedType !== 'FLOAT') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with width (expected FLOAT)`);
+      }
+
+      node.setBoundVariable('width', variable);
+
+    } else if (property === 'height') {
+      if (!('height' in node)) {
+        throw new Error(`Node type ${node.type} does not support height`);
+      }
+      if (variable.resolvedType !== 'FLOAT') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with height (expected FLOAT)`);
+      }
+
+      node.setBoundVariable('height', variable);
+
+    } else if (property === 'cornerradius' || property === 'corner_radius') {
+      if (!('cornerRadius' in node)) {
+        throw new Error(`Node type ${node.type} does not support corner radius`);
+      }
+      if (variable.resolvedType !== 'FLOAT') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with cornerRadius (expected FLOAT)`);
+      }
+
+      node.setBoundVariable('cornerRadius', variable);
+
+    } else if (property === 'itemspacing' || property === 'item_spacing') {
+      if (!('itemSpacing' in node)) {
+        throw new Error(`Node type ${node.type} does not support item spacing`);
+      }
+      if (variable.resolvedType !== 'FLOAT') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with itemSpacing (expected FLOAT)`);
+      }
+
+      node.setBoundVariable('itemSpacing', variable);
+
+    } else if (property === 'paddingtop' || property === 'padding_top') {
+      if (!('paddingTop' in node)) {
+        throw new Error(`Node type ${node.type} does not support padding`);
+      }
+      if (variable.resolvedType !== 'FLOAT') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with paddingTop (expected FLOAT)`);
+      }
+
+      node.setBoundVariable('paddingTop', variable);
+
+    } else if (property === 'paddingright' || property === 'padding_right') {
+      if (!('paddingRight' in node)) {
+        throw new Error(`Node type ${node.type} does not support padding`);
+      }
+      if (variable.resolvedType !== 'FLOAT') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with paddingRight (expected FLOAT)`);
+      }
+
+      node.setBoundVariable('paddingRight', variable);
+
+    } else if (property === 'paddingbottom' || property === 'padding_bottom') {
+      if (!('paddingBottom' in node)) {
+        throw new Error(`Node type ${node.type} does not support padding`);
+      }
+      if (variable.resolvedType !== 'FLOAT') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with paddingBottom (expected FLOAT)`);
+      }
+
+      node.setBoundVariable('paddingBottom', variable);
+
+    } else if (property === 'paddingleft' || property === 'padding_left') {
+      if (!('paddingLeft' in node)) {
+        throw new Error(`Node type ${node.type} does not support padding`);
+      }
+      if (variable.resolvedType !== 'FLOAT') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with paddingLeft (expected FLOAT)`);
+      }
+
+      node.setBoundVariable('paddingLeft', variable);
+
+    } else if (property === 'characters' || property === 'text') {
+      if (node.type !== 'TEXT') {
+        throw new Error(`Node type ${node.type} does not support text (expected TEXT node)`);
+      }
+      if (variable.resolvedType !== 'STRING') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with characters (expected STRING)`);
+      }
+
+      await node.loadAsync();
+      node.setBoundVariable('characters', variable);
+
+    } else if (property === 'opacity') {
+      if (!('opacity' in node)) {
+        throw new Error(`Node type ${node.type} does not support opacity`);
+      }
+      if (variable.resolvedType !== 'FLOAT') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with opacity (expected FLOAT)`);
+      }
+
+      node.setBoundVariable('opacity', variable);
+
+    } else if (property === 'rotation') {
+      if (!('rotation' in node)) {
+        throw new Error(`Node type ${node.type} does not support rotation`);
+      }
+      if (variable.resolvedType !== 'FLOAT') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with rotation (expected FLOAT)`);
+      }
+
+      node.setBoundVariable('rotation', variable);
+
+    } else if (property === 'fontfamily' || property === 'font_family') {
+      if (node.type !== 'TEXT') {
+        throw new Error(`Node type ${node.type} does not support fontFamily (expected TEXT node)`);
+      }
+      if (variable.resolvedType !== 'STRING') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with fontFamily (expected STRING)`);
+      }
+
+      await node.loadAsync();
+      node.setBoundVariable('fontFamily', variable);
+
+    } else if (property === 'fontstyle' || property === 'font_style') {
+      if (node.type !== 'TEXT') {
+        throw new Error(`Node type ${node.type} does not support fontStyle (expected TEXT node)`);
+      }
+      if (variable.resolvedType !== 'STRING') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with fontStyle (expected STRING)`);
+      }
+
+      await node.loadAsync();
+      node.setBoundVariable('fontStyle', variable);
+
+    } else if (property === 'fontweight' || property === 'font_weight') {
+      if (node.type !== 'TEXT') {
+        throw new Error(`Node type ${node.type} does not support fontWeight (expected TEXT node)`);
+      }
+      if (variable.resolvedType !== 'FLOAT') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with fontWeight (expected FLOAT)`);
+      }
+
+      await node.loadAsync();
+      node.setBoundVariable('fontWeight', variable);
+
+    } else if (property === 'fontsize' || property === 'font_size') {
+      if (node.type !== 'TEXT') {
+        throw new Error(`Node type ${node.type} does not support fontSize (expected TEXT node)`);
+      }
+      if (variable.resolvedType !== 'FLOAT') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with fontSize (expected FLOAT)`);
+      }
+
+      await node.loadAsync();
+      node.setBoundVariable('fontSize', variable);
+
+    } else if (property === 'lineheight' || property === 'line_height') {
+      if (node.type !== 'TEXT') {
+        throw new Error(`Node type ${node.type} does not support lineHeight (expected TEXT node)`);
+      }
+      if (variable.resolvedType !== 'FLOAT') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with lineHeight (expected FLOAT)`);
+      }
+
+      await node.loadAsync();
+      node.setBoundVariable('lineHeight', variable);
+
+    } else if (property === 'letterspacing' || property === 'letter_spacing') {
+      if (node.type !== 'TEXT') {
+        throw new Error(`Node type ${node.type} does not support letterSpacing (expected TEXT node)`);
+      }
+      if (variable.resolvedType !== 'FLOAT') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with letterSpacing (expected FLOAT)`);
+      }
+
+      await node.loadAsync();
+      node.setBoundVariable('letterSpacing', variable);
+
+    } else if (property === 'paragraphspacing' || property === 'paragraph_spacing') {
+      if (node.type !== 'TEXT') {
+        throw new Error(`Node type ${node.type} does not support paragraphSpacing (expected TEXT node)`);
+      }
+      if (variable.resolvedType !== 'FLOAT') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with paragraphSpacing (expected FLOAT)`);
+      }
+
+      await node.loadAsync();
+      node.setBoundVariable('paragraphSpacing', variable);
+
+    } else if (property === 'paragraphindent' || property === 'paragraph_indent') {
+      if (node.type !== 'TEXT') {
+        throw new Error(`Node type ${node.type} does not support paragraphIndent (expected TEXT node)`);
+      }
+      if (variable.resolvedType !== 'FLOAT') {
+        throw new Error(`Variable type ${variable.resolvedType} is not compatible with paragraphIndent (expected FLOAT)`);
+      }
+
+      await node.loadAsync();
+      node.setBoundVariable('paragraphIndent', variable);
+
+    } else {
+      throw new Error(`Unsupported property: ${params.property}. Supported properties: fills, strokes, width, height, cornerRadius, itemSpacing, opacity, rotation, paddingTop, paddingRight, paddingBottom, paddingLeft, characters, fontFamily, fontStyle, fontWeight, fontSize, lineHeight, letterSpacing, paragraphSpacing, paragraphIndent`);
+    }
+
+    return {
+      success: true,
+      message: `Successfully applied variable "${variable.name}" to ${property} of node "${node.name}"`,
+      nodeId: node.id,
+      nodeName: node.name,
+      variableId: variable.id,
+      variableName: variable.name,
+      property: property
+    };
+
+  } catch (error) {
+    return {
+      success: false,
+      message: `Error applying variable to node: ${error.message}`,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Apply variables to multiple nodes
+ * @param {Object} params - Parameters for applying variables
+ * @param {Array} params.applications - Array of application objects
+ * @param {string} params.applications[].nodeId - ID of the node
+ * @param {string} params.applications[].variableId - ID of the variable
+ * @param {string} params.applications[].property - Property to bind
+ * @param {number} [params.applications[].fieldIndex] - Optional field index
+ * @returns {Object} Object containing success status and results for each application
+ */
+async function applyVariablesToNodes(params) {
+  try {
+    if (!params.applications || !Array.isArray(params.applications)) {
+      throw new Error("Missing or invalid required parameter: applications (must be an array)");
+    }
+
+    if (params.applications.length === 0) {
+      throw new Error("applications array cannot be empty");
+    }
+
+    const results = [];
+    let successCount = 0;
+    let failureCount = 0;
+
+    for (const application of params.applications) {
+      const result = await applyVariableToNode(application);
+      results.push(result);
+
+      if (result.success) {
+        successCount++;
+      } else {
+        failureCount++;
+      }
+    }
+
+    return {
+      success: failureCount === 0,
+      message: `Applied variables: ${successCount} succeeded, ${failureCount} failed`,
+      totalCount: params.applications.length,
+      successCount: successCount,
+      failureCount: failureCount,
+      results: results
+    };
+
+  } catch (error) {
+    return {
+      success: false,
+      message: `Error applying variables to nodes: ${error.message}`,
+      error: error.message
+    };
+  }
 }

@@ -524,6 +524,109 @@ server.tool(
   }
 );
 
+// Create Section Tool
+server.tool(
+  "create_section",
+  "Create a new section in Figma. Sections are organizational containers that can only be direct children of a page.",
+  {
+    x: z.number().describe("X position"),
+    y: z.number().describe("Y position"),
+    width: z.number().describe("Width of the section"),
+    height: z.number().describe("Height of the section"),
+    name: z.string().optional().describe("Optional name for the section"),
+    fillColor: z
+      .object({
+        r: z.number().min(0).max(1).describe("Red component (0-1)"),
+        g: z.number().min(0).max(1).describe("Green component (0-1)"),
+        b: z.number().min(0).max(1).describe("Blue component (0-1)"),
+        a: z
+          .number()
+          .min(0)
+          .max(1)
+          .optional()
+          .describe("Alpha component (0-1)"),
+      })
+      .optional()
+      .describe("Fill color in RGBA format"),
+  },
+  async ({ x, y, width, height, name, fillColor }: any) => {
+    try {
+      const result = await sendCommandToFigma("create_section", {
+        x,
+        y,
+        width,
+        height,
+        name: name || "Section",
+        fillColor,
+      });
+      const typedResult = result as { name: string; id: string };
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Created section "${typedResult.name}" with ID: ${typedResult.id}. Sections can contain frames and other elements.`,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error creating section: ${error instanceof Error ? error.message : String(error)
+              }`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Append Child Tool
+server.tool(
+  "append_child",
+  "Move a node to become a child of another node (reparenting). Useful for moving nodes into sections or frames. Supported parent types: SectionNode, FrameNode, ComponentNode, GroupNode, and other container nodes.",
+  {
+    parentId: z.string().describe("The ID of the parent node to move the child into"),
+    childId: z.string().describe("The ID of the child node to move"),
+  },
+  async ({ parentId, childId }: any) => {
+    try {
+      const result = await sendCommandToFigma("append_child", {
+        parentId,
+        childId,
+      });
+      const typedResult = result as {
+        success: boolean;
+        parentId: string;
+        parentName: string;
+        parentType: string;
+        childId: string;
+        childName: string;
+        childType: string;
+      };
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Moved "${typedResult.childName}" (${typedResult.childType}) into "${typedResult.parentName}" (${typedResult.parentType})`,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error appending child: ${error instanceof Error ? error.message : String(error)
+              }`,
+          },
+        ],
+      };
+    }
+  }
+);
+
 // Create Text Tool
 server.tool(
   "create_text",
@@ -2616,6 +2719,8 @@ type FigmaCommand =
   | "read_my_design"
   | "create_rectangle"
   | "create_frame"
+  | "create_section"
+  | "append_child"
   | "create_text"
   | "set_fill_color"
   | "set_stroke_color"
@@ -2625,6 +2730,10 @@ type FigmaCommand =
   | "delete_multiple_nodes"
   | "get_styles"
   | "get_local_components"
+  | "get_local_variables"
+  | "get_local_variable_collections"
+  | "apply_variable_to_node"
+  | "apply_variables_to_nodes"
   | "create_component_instance"
   | "get_instance_overrides"
   | "set_instance_overrides"
@@ -2673,6 +2782,18 @@ type CommandParams = {
     fillColor?: { r: number; g: number; b: number; a?: number };
     strokeColor?: { r: number; g: number; b: number; a?: number };
     strokeWeight?: number;
+  };
+  create_section: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    name?: string;
+    fillColor?: { r: number; g: number; b: number; a?: number };
+  };
+  append_child: {
+    parentId: string;
+    childId: string;
   };
   create_text: {
     x: number;
@@ -3070,6 +3191,141 @@ server.tool(
             type: "text",
             text: `Error joining channel: ${error instanceof Error ? error.message : String(error)
               }`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Get Local Variables Tool
+server.tool(
+  "get_local_variables",
+  "Get all local variables from the current Figma file, optionally filtered by type",
+  {
+    type: z.enum(["BOOLEAN", "FLOAT", "STRING", "COLOR"]).optional().describe("Optional filter by variable type (BOOLEAN, FLOAT, STRING, COLOR)"),
+  },
+  async ({ type }: any) => {
+    try {
+      const params = type ? { type } : {};
+      const result = await sendCommandToFigma("get_local_variables", params);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error getting local variables: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Get Local Variable Collections Tool
+server.tool(
+  "get_local_variable_collections",
+  "Get all local variable collections from the current Figma file",
+  {},
+  async () => {
+    try {
+      const result = await sendCommandToFigma("get_local_variable_collections");
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error getting variable collections: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Apply Variable to Node Tool
+server.tool(
+  "apply_variable_to_node",
+  "Apply a variable to a specific property of a node in Figma",
+  {
+    nodeId: z.string().describe("The ID of the node to apply the variable to"),
+    variableId: z.string().describe("The ID of the variable to apply"),
+    property: z.string().describe("The property to bind the variable to. Supported properties: fills, strokes, width, height, cornerRadius, itemSpacing, opacity, rotation, paddingTop, paddingRight, paddingBottom, paddingLeft, characters, fontFamily, fontStyle, fontWeight, fontSize, lineHeight, letterSpacing, paragraphSpacing, paragraphIndent"),
+    fieldIndex: z.number().optional().describe("Optional index for array properties like fills/strokes (default: 0)"),
+  },
+  async ({ nodeId, variableId, property, fieldIndex }: any) => {
+    try {
+      const params: any = { nodeId, variableId, property };
+      if (fieldIndex !== undefined) {
+        params.fieldIndex = fieldIndex;
+      }
+      const result = await sendCommandToFigma("apply_variable_to_node", params);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error applying variable to node: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Apply Variables to Multiple Nodes Tool
+server.tool(
+  "apply_variables_to_nodes",
+  "Apply variables to multiple nodes in Figma",
+  {
+    applications: z.array(z.object({
+      nodeId: z.string().describe("The ID of the node"),
+      variableId: z.string().describe("The ID of the variable"),
+      property: z.string().describe("The property to bind the variable to"),
+      fieldIndex: z.number().optional().describe("Optional field index for array properties"),
+    })).describe("Array of variable applications, each specifying nodeId, variableId, property, and optionally fieldIndex"),
+  },
+  async ({ applications }: any) => {
+    try {
+      const result = await sendCommandToFigma("apply_variables_to_nodes", { applications });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error applying variables to nodes: ${error instanceof Error ? error.message : String(error)}`,
           },
         ],
       };
