@@ -125,10 +125,6 @@ async function handleCommand(command, params) {
       return await createRectangle(params);
     case "create_frame":
       return await createFrame(params);
-    case "create_section":
-      return await createSection(params);
-    case "append_child":
-      return await appendChildToNode(params);
     case "create_text":
       return await createText(params);
     case "set_fill_color":
@@ -237,14 +233,33 @@ async function handleCommand(command, params) {
       return await setFocus(params);
     case "set_selections":
       return await setSelections(params);
-    case "get_local_variables":
-      return await getLocalVariables(params);
-    case "get_local_variable_collections":
-      return await getLocalVariableCollections();
-    case "apply_variable_to_node":
-      return await applyVariableToNode(params);
-    case "apply_variables_to_nodes":
-      return await applyVariablesToNodes(params);
+    // FigJam-specific commands
+    case "create_sticky":
+      return await createSticky(params);
+    case "create_shape_with_text":
+      return await createShapeWithText(params);
+    case "create_connector":
+      return await createFigJamConnector(params);
+    case "create_code_block":
+      return await createCodeBlock(params);
+    case "create_table":
+      return await createTable(params);
+    case "set_table_cell_content":
+      return await setTableCellContent(params);
+    case "start_figjam_timer":
+      return await startFigJamTimer(params);
+    case "pause_figjam_timer":
+      return await pauseFigJamTimer();
+    case "resume_figjam_timer":
+      return await resumeFigJamTimer();
+    case "stop_figjam_timer":
+      return await stopFigJamTimer();
+    case "get_figjam_timer":
+      return await getFigJamTimer();
+    case "get_stamp_info":
+      return await getStampInfo(params);
+    case "get_figjam_info":
+      return await getFigJamInfo();
     default:
       throw new Error(`Unknown command: ${command}`);
   }
@@ -815,89 +830,6 @@ async function createFrame(params) {
     layoutMode: frame.layoutMode,
     layoutWrap: frame.layoutWrap,
     parentId: frame.parent ? frame.parent.id : undefined,
-  };
-}
-
-async function createSection(params) {
-  const {
-    x = 0,
-    y = 0,
-    width = 500,
-    height = 300,
-    name = "Section",
-    fillColor,
-  } = params || {};
-
-  const section = figma.createSection();
-  section.x = x;
-  section.y = y;
-  section.resizeWithoutConstraints(width, height);
-  section.name = name;
-
-  // Set fill color if provided
-  if (fillColor) {
-    const paintStyle = {
-      type: "SOLID",
-      color: {
-        r: parseFloat(fillColor.r) || 0,
-        g: parseFloat(fillColor.g) || 0,
-        b: parseFloat(fillColor.b) || 0,
-      },
-      opacity: parseFloat(fillColor.a) || 1,
-    };
-    section.fills = [paintStyle];
-  }
-
-  // Sections can only be direct children of a page
-  figma.currentPage.appendChild(section);
-
-  return {
-    id: section.id,
-    name: section.name,
-    x: section.x,
-    y: section.y,
-    width: section.width,
-    height: section.height,
-    fills: section.fills,
-  };
-}
-
-async function appendChildToNode(params) {
-  const { parentId, childId } = params || {};
-
-  if (!parentId) {
-    throw new Error("parentId is required");
-  }
-  if (!childId) {
-    throw new Error("childId is required");
-  }
-
-  const parentNode = await figma.getNodeByIdAsync(parentId);
-  if (!parentNode) {
-    throw new Error(`Parent node not found with ID: ${parentId}`);
-  }
-
-  const childNode = await figma.getNodeByIdAsync(childId);
-  if (!childNode) {
-    throw new Error(`Child node not found with ID: ${childId}`);
-  }
-
-  // Check if parent supports appendChild
-  if (!("appendChild" in parentNode)) {
-    throw new Error(`Parent node (${parentNode.type}) does not support children`);
-  }
-
-  // Perform the reparenting
-  parentNode.appendChild(childNode);
-
-  return {
-    success: true,
-    parentId: parentNode.id,
-    parentName: parentNode.name,
-    parentType: parentNode.type,
-    childId: childNode.id,
-    childName: childNode.name,
-    childType: childNode.type,
   };
 }
 
@@ -4122,467 +4054,475 @@ async function setSelections(params) {
   };
 }
 
-// Variable-related functions
+// =====================================================
+// FigJam-Specific Functions
+// =====================================================
 
-/**
- * Get local variables from the current file
- * @param {Object} params - Optional parameters
- * @param {string} [params.type] - Optional filter by variable type (BOOLEAN, FLOAT, STRING, COLOR)
- * @returns {Object} Object containing success status, variable collections, and variables
- */
-async function getLocalVariables(params = {}) {
-  try {
-    // Get all local variable collections
-    const collections = await figma.variables.getLocalVariableCollectionsAsync();
+// Map of FigJam sticky note colors
+const STICKY_COLORS = {
+  YELLOW: { r: 1, g: 0.898, b: 0.4 },
+  ORANGE: { r: 1, g: 0.698, b: 0.4 },
+  RED: { r: 1, g: 0.498, b: 0.498 },
+  PINK: { r: 1, g: 0.6, b: 0.8 },
+  VIOLET: { r: 0.698, g: 0.6, b: 1 },
+  BLUE: { r: 0.4, g: 0.698, b: 1 },
+  TEAL: { r: 0.4, g: 0.898, b: 0.8 },
+  GREEN: { r: 0.6, g: 0.898, b: 0.4 },
+  GRAY: { r: 0.8, g: 0.8, b: 0.8 },
+};
 
-    // Get all local variables, optionally filtered by type
-    const variables = params.type
-      ? await figma.variables.getLocalVariablesAsync(params.type)
-      : await figma.variables.getLocalVariablesAsync();
+// Create a sticky note
+async function createSticky(params) {
+  if (!params || !params.text) {
+    throw new Error("Missing text parameter for sticky note");
+  }
 
-    // Build collection map for easier lookup
-    const collectionMap = {};
-    for (const collection of collections) {
-      collectionMap[collection.id] = {
-        id: collection.id,
-        name: collection.name,
-        modes: collection.modes.map(mode => ({
-          modeId: mode.modeId,
-          name: mode.name
-        })),
-        defaultModeId: collection.defaultModeId,
-        variableIds: collection.variableIds
+  // Check if this is a FigJam file
+  if (figma.editorType !== 'figjam') {
+    throw new Error("createSticky is only available in FigJam files");
+  }
+
+  const sticky = figma.createSticky();
+  
+  // Set position
+  sticky.x = params.x !== undefined ? params.x : figma.viewport.center.x;
+  sticky.y = params.y !== undefined ? params.y : figma.viewport.center.y;
+  
+  // Load font and set text
+  await figma.loadFontAsync(sticky.text.fontName);
+  sticky.text.characters = params.text;
+  
+  // Set sticky color if provided
+  if (params.color && STICKY_COLORS[params.color]) {
+    const color = STICKY_COLORS[params.color];
+    sticky.fills = [{ type: 'SOLID', color: color }];
+  }
+  
+  // Set author visibility
+  if (params.authorVisible !== undefined) {
+    sticky.authorVisible = params.authorVisible;
+  }
+  
+  // Set wide width mode
+  if (params.isWideWidth !== undefined) {
+    sticky.isWideWidth = params.isWideWidth;
+  }
+  
+  // Add to parent if specified
+  if (params.parentId) {
+    const parent = await figma.getNodeByIdAsync(params.parentId);
+    if (parent && 'appendChild' in parent) {
+      parent.appendChild(sticky);
+    }
+  }
+  
+  // Select and scroll to the sticky
+  figma.currentPage.selection = [sticky];
+  figma.viewport.scrollAndZoomIntoView([sticky]);
+
+  return {
+    success: true,
+    id: sticky.id,
+    name: sticky.name,
+    text: sticky.text.characters,
+    authorName: sticky.authorName,
+    x: sticky.x,
+    y: sticky.y
+  };
+}
+
+// Create a shape with text (for flowcharts, diagrams)
+async function createShapeWithText(params) {
+  if (!params || !params.shapeType) {
+    throw new Error("Missing shapeType parameter");
+  }
+
+  // Check if this is a FigJam file
+  if (figma.editorType !== 'figjam') {
+    throw new Error("createShapeWithText is only available in FigJam files");
+  }
+
+  const shape = figma.createShapeWithText();
+  
+  // Set shape type
+  shape.shapeType = params.shapeType;
+  
+  // Set position
+  shape.x = params.x !== undefined ? params.x : figma.viewport.center.x;
+  shape.y = params.y !== undefined ? params.y : figma.viewport.center.y;
+  
+  // Set text if provided
+  if (params.text) {
+    await figma.loadFontAsync(shape.text.fontName);
+    shape.text.characters = params.text;
+  }
+  
+  // Set fill color if provided
+  if (params.fillColor) {
+    shape.fills = [{ type: 'SOLID', color: params.fillColor }];
+  }
+  
+  // Add to parent if specified
+  if (params.parentId) {
+    const parent = await figma.getNodeByIdAsync(params.parentId);
+    if (parent && 'appendChild' in parent) {
+      parent.appendChild(shape);
+    }
+  }
+  
+  // Select and scroll to the shape
+  figma.currentPage.selection = [shape];
+  figma.viewport.scrollAndZoomIntoView([shape]);
+
+  return {
+    success: true,
+    id: shape.id,
+    name: shape.name,
+    shapeType: shape.shapeType,
+    text: shape.text.characters,
+    x: shape.x,
+    y: shape.y
+  };
+}
+
+// Create a connector between nodes
+async function createFigJamConnector(params) {
+  // Check if this is a FigJam file
+  if (figma.editorType !== 'figjam') {
+    throw new Error("createConnector is only available in FigJam files");
+  }
+
+  const connector = figma.createConnector();
+  
+  // Set start endpoint if node ID is provided
+  if (params.startNodeId) {
+    const startNode = await figma.getNodeByIdAsync(params.startNodeId);
+    if (startNode) {
+      connector.connectorStart = {
+        endpointNodeId: startNode.id,
+        magnet: params.startMagnet || 'AUTO'
       };
     }
-
-    // Format variables with their values
-    const formattedVariables = variables.map(variable => {
-      const collection = collectionMap[variable.variableCollectionId];
-
-      // Get values for each mode
-      const valuesByMode = {};
-      for (const modeId in variable.valuesByMode) {
-        const value = variable.valuesByMode[modeId];
-        const mode = collection && collection.modes ? collection.modes.find(m => m.modeId === modeId) : null;
-        valuesByMode[modeId] = {
-          value: value,
-          modeName: mode ? mode.name : modeId
-        };
-      }
-
-      return {
-        id: variable.id,
-        name: variable.name,
-        key: variable.key,
-        variableCollectionId: variable.variableCollectionId,
-        collectionName: collection ? collection.name : 'Unknown Collection',
-        resolvedType: variable.resolvedType,
-        valuesByMode: valuesByMode,
-        scopes: variable.scopes,
-        hiddenFromPublishing: variable.hiddenFromPublishing,
-        description: variable.description
+  }
+  
+  // Set end endpoint if node ID is provided
+  if (params.endNodeId) {
+    const endNode = await figma.getNodeByIdAsync(params.endNodeId);
+    if (endNode) {
+      connector.connectorEnd = {
+        endpointNodeId: endNode.id,
+        magnet: params.endMagnet || 'AUTO'
       };
-    });
-
-    return {
-      success: true,
-      message: `Found ${variables.length} variable(s) in ${collections.length} collection(s)`,
-      collections: Object.values(collectionMap),
-      variables: formattedVariables,
-      count: variables.length
-    };
-  } catch (error) {
-    return {
-      success: false,
-      message: `Error getting local variables: ${error.message}`,
-      error: error.message
-    };
+    }
   }
+  
+  // Set connector type (ELBOWED or STRAIGHT)
+  if (params.connectorType) {
+    connector.connectorLineType = params.connectorType;
+  }
+  
+  // Set stroke color if provided
+  if (params.strokeColor) {
+    connector.strokes = [{ type: 'SOLID', color: params.strokeColor }];
+  }
+  
+  // Set stroke weight if provided
+  if (params.strokeWeight) {
+    connector.strokeWeight = params.strokeWeight;
+  }
+  
+  // Set text label if provided
+  if (params.text) {
+    await figma.loadFontAsync(connector.text.fontName);
+    connector.text.characters = params.text;
+  }
+  
+  // Select and scroll to the connector
+  figma.currentPage.selection = [connector];
+  figma.viewport.scrollAndZoomIntoView([connector]);
+
+  return {
+    success: true,
+    id: connector.id,
+    name: connector.name,
+    connectorLineType: connector.connectorLineType,
+    hasText: connector.text.characters.length > 0
+  };
 }
 
-/**
- * Get all local variable collections
- * @returns {Object} Object containing success status and collections
- */
-async function getLocalVariableCollections() {
-  try {
-    const collections = await figma.variables.getLocalVariableCollectionsAsync();
-
-    const formattedCollections = collections.map(collection => ({
-      id: collection.id,
-      name: collection.name,
-      key: collection.key,
-      modes: collection.modes.map(mode => ({
-        modeId: mode.modeId,
-        name: mode.name
-      })),
-      defaultModeId: collection.defaultModeId,
-      variableIds: collection.variableIds,
-      variableCount: collection.variableIds.length
-    }));
-
-    return {
-      success: true,
-      message: `Found ${collections.length} variable collection(s)`,
-      collections: formattedCollections,
-      count: collections.length
-    };
-  } catch (error) {
-    return {
-      success: false,
-      message: `Error getting variable collections: ${error.message}`,
-      error: error.message
-    };
+// Create a code block
+async function createCodeBlock(params) {
+  if (!params || !params.code) {
+    throw new Error("Missing code parameter");
   }
+
+  // Check if this is a FigJam file
+  if (figma.editorType !== 'figjam') {
+    throw new Error("createCodeBlock is only available in FigJam files");
+  }
+
+  const codeBlock = figma.createCodeBlock();
+  
+  // Set position
+  codeBlock.x = params.x !== undefined ? params.x : figma.viewport.center.x;
+  codeBlock.y = params.y !== undefined ? params.y : figma.viewport.center.y;
+  
+  // Set code content
+  codeBlock.code = params.code;
+  
+  // Set language if provided
+  if (params.language) {
+    codeBlock.codeLanguage = params.language;
+  }
+  
+  // Add to parent if specified
+  if (params.parentId) {
+    const parent = await figma.getNodeByIdAsync(params.parentId);
+    if (parent && 'appendChild' in parent) {
+      parent.appendChild(codeBlock);
+    }
+  }
+  
+  // Select and scroll to the code block
+  figma.currentPage.selection = [codeBlock];
+  figma.viewport.scrollAndZoomIntoView([codeBlock]);
+
+  return {
+    success: true,
+    id: codeBlock.id,
+    name: codeBlock.name,
+    language: codeBlock.codeLanguage,
+    codeLength: codeBlock.code.length,
+    x: codeBlock.x,
+    y: codeBlock.y
+  };
 }
 
-/**
- * Apply a variable to a node property
- * @param {Object} params - Parameters for applying variable
- * @param {string} params.nodeId - ID of the node to apply variable to
- * @param {string} params.variableId - ID of the variable to apply
- * @param {string} params.property - Property to bind the variable to (e.g., 'fills', 'width', 'height', 'cornerRadius')
- * @param {number} [params.fieldIndex] - Optional index for array properties like fills/strokes (default: 0)
- * @returns {Object} Object containing success status and details
- */
-async function applyVariableToNode(params) {
-  try {
-    if (!params.nodeId) {
-      throw new Error("Missing required parameter: nodeId");
-    }
-    if (!params.variableId) {
-      throw new Error("Missing required parameter: variableId");
-    }
-    if (!params.property) {
-      throw new Error("Missing required parameter: property");
-    }
-
-    // Get the node
-    const node = await figma.getNodeByIdAsync(params.nodeId);
-    if (!node) {
-      throw new Error(`Node not found with ID: ${params.nodeId}`);
-    }
-
-    // Get the variable
-    const variable = await figma.variables.getVariableByIdAsync(params.variableId);
-    if (!variable) {
-      throw new Error(`Variable not found with ID: ${params.variableId}`);
-    }
-
-    // Apply the variable based on property type
-    const property = params.property.toLowerCase();
-    const fieldIndex = params.fieldIndex || 0;
-
-    // Handle different property types
-    if (property === 'fills' || property === 'fill') {
-      if (!('fills' in node)) {
-        throw new Error(`Node type ${node.type} does not support fills`);
-      }
-      if (variable.resolvedType !== 'COLOR') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with fills (expected COLOR)`);
-      }
-
-      // Ensure node has at least one fill
-      if (!node.fills || node.fills.length === 0) {
-        node.fills = [{ type: 'SOLID', color: { r: 0, g: 0, b: 0 } }];
-      }
-
-      // Clone fills array to avoid mutating the original
-      const fillsCopy = JSON.parse(JSON.stringify(node.fills));
-      // Bind variable to the first fill's color
-      fillsCopy[fieldIndex] = figma.variables.setBoundVariableForPaint(fillsCopy[fieldIndex], 'color', variable);
-      node.fills = fillsCopy;
-
-    } else if (property === 'strokes' || property === 'stroke') {
-      if (!('strokes' in node)) {
-        throw new Error(`Node type ${node.type} does not support strokes`);
-      }
-      if (variable.resolvedType !== 'COLOR') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with strokes (expected COLOR)`);
-      }
-
-      // Ensure node has at least one stroke
-      if (!node.strokes || node.strokes.length === 0) {
-        node.strokes = [{ type: 'SOLID', color: { r: 0, g: 0, b: 0 } }];
-      }
-
-      // Clone strokes array to avoid mutating the original
-      const strokesCopy = JSON.parse(JSON.stringify(node.strokes));
-      // Bind variable to the first stroke's color
-      strokesCopy[fieldIndex] = figma.variables.setBoundVariableForPaint(strokesCopy[fieldIndex], 'color', variable);
-      node.strokes = strokesCopy;
-
-    } else if (property === 'width') {
-      if (!('width' in node)) {
-        throw new Error(`Node type ${node.type} does not support width`);
-      }
-      if (variable.resolvedType !== 'FLOAT') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with width (expected FLOAT)`);
-      }
-
-      node.setBoundVariable('width', variable);
-
-    } else if (property === 'height') {
-      if (!('height' in node)) {
-        throw new Error(`Node type ${node.type} does not support height`);
-      }
-      if (variable.resolvedType !== 'FLOAT') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with height (expected FLOAT)`);
-      }
-
-      node.setBoundVariable('height', variable);
-
-    } else if (property === 'cornerradius' || property === 'corner_radius') {
-      if (!('cornerRadius' in node)) {
-        throw new Error(`Node type ${node.type} does not support corner radius`);
-      }
-      if (variable.resolvedType !== 'FLOAT') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with cornerRadius (expected FLOAT)`);
-      }
-
-      node.setBoundVariable('cornerRadius', variable);
-
-    } else if (property === 'itemspacing' || property === 'item_spacing') {
-      if (!('itemSpacing' in node)) {
-        throw new Error(`Node type ${node.type} does not support item spacing`);
-      }
-      if (variable.resolvedType !== 'FLOAT') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with itemSpacing (expected FLOAT)`);
-      }
-
-      node.setBoundVariable('itemSpacing', variable);
-
-    } else if (property === 'paddingtop' || property === 'padding_top') {
-      if (!('paddingTop' in node)) {
-        throw new Error(`Node type ${node.type} does not support padding`);
-      }
-      if (variable.resolvedType !== 'FLOAT') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with paddingTop (expected FLOAT)`);
-      }
-
-      node.setBoundVariable('paddingTop', variable);
-
-    } else if (property === 'paddingright' || property === 'padding_right') {
-      if (!('paddingRight' in node)) {
-        throw new Error(`Node type ${node.type} does not support padding`);
-      }
-      if (variable.resolvedType !== 'FLOAT') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with paddingRight (expected FLOAT)`);
-      }
-
-      node.setBoundVariable('paddingRight', variable);
-
-    } else if (property === 'paddingbottom' || property === 'padding_bottom') {
-      if (!('paddingBottom' in node)) {
-        throw new Error(`Node type ${node.type} does not support padding`);
-      }
-      if (variable.resolvedType !== 'FLOAT') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with paddingBottom (expected FLOAT)`);
-      }
-
-      node.setBoundVariable('paddingBottom', variable);
-
-    } else if (property === 'paddingleft' || property === 'padding_left') {
-      if (!('paddingLeft' in node)) {
-        throw new Error(`Node type ${node.type} does not support padding`);
-      }
-      if (variable.resolvedType !== 'FLOAT') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with paddingLeft (expected FLOAT)`);
-      }
-
-      node.setBoundVariable('paddingLeft', variable);
-
-    } else if (property === 'characters' || property === 'text') {
-      if (node.type !== 'TEXT') {
-        throw new Error(`Node type ${node.type} does not support text (expected TEXT node)`);
-      }
-      if (variable.resolvedType !== 'STRING') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with characters (expected STRING)`);
-      }
-
-      await node.loadAsync();
-      node.setBoundVariable('characters', variable);
-
-    } else if (property === 'opacity') {
-      if (!('opacity' in node)) {
-        throw new Error(`Node type ${node.type} does not support opacity`);
-      }
-      if (variable.resolvedType !== 'FLOAT') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with opacity (expected FLOAT)`);
-      }
-
-      node.setBoundVariable('opacity', variable);
-
-    } else if (property === 'rotation') {
-      if (!('rotation' in node)) {
-        throw new Error(`Node type ${node.type} does not support rotation`);
-      }
-      if (variable.resolvedType !== 'FLOAT') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with rotation (expected FLOAT)`);
-      }
-
-      node.setBoundVariable('rotation', variable);
-
-    } else if (property === 'fontfamily' || property === 'font_family') {
-      if (node.type !== 'TEXT') {
-        throw new Error(`Node type ${node.type} does not support fontFamily (expected TEXT node)`);
-      }
-      if (variable.resolvedType !== 'STRING') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with fontFamily (expected STRING)`);
-      }
-
-      await node.loadAsync();
-      node.setBoundVariable('fontFamily', variable);
-
-    } else if (property === 'fontstyle' || property === 'font_style') {
-      if (node.type !== 'TEXT') {
-        throw new Error(`Node type ${node.type} does not support fontStyle (expected TEXT node)`);
-      }
-      if (variable.resolvedType !== 'STRING') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with fontStyle (expected STRING)`);
-      }
-
-      await node.loadAsync();
-      node.setBoundVariable('fontStyle', variable);
-
-    } else if (property === 'fontweight' || property === 'font_weight') {
-      if (node.type !== 'TEXT') {
-        throw new Error(`Node type ${node.type} does not support fontWeight (expected TEXT node)`);
-      }
-      if (variable.resolvedType !== 'FLOAT') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with fontWeight (expected FLOAT)`);
-      }
-
-      await node.loadAsync();
-      node.setBoundVariable('fontWeight', variable);
-
-    } else if (property === 'fontsize' || property === 'font_size') {
-      if (node.type !== 'TEXT') {
-        throw new Error(`Node type ${node.type} does not support fontSize (expected TEXT node)`);
-      }
-      if (variable.resolvedType !== 'FLOAT') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with fontSize (expected FLOAT)`);
-      }
-
-      await node.loadAsync();
-      node.setBoundVariable('fontSize', variable);
-
-    } else if (property === 'lineheight' || property === 'line_height') {
-      if (node.type !== 'TEXT') {
-        throw new Error(`Node type ${node.type} does not support lineHeight (expected TEXT node)`);
-      }
-      if (variable.resolvedType !== 'FLOAT') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with lineHeight (expected FLOAT)`);
-      }
-
-      await node.loadAsync();
-      node.setBoundVariable('lineHeight', variable);
-
-    } else if (property === 'letterspacing' || property === 'letter_spacing') {
-      if (node.type !== 'TEXT') {
-        throw new Error(`Node type ${node.type} does not support letterSpacing (expected TEXT node)`);
-      }
-      if (variable.resolvedType !== 'FLOAT') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with letterSpacing (expected FLOAT)`);
-      }
-
-      await node.loadAsync();
-      node.setBoundVariable('letterSpacing', variable);
-
-    } else if (property === 'paragraphspacing' || property === 'paragraph_spacing') {
-      if (node.type !== 'TEXT') {
-        throw new Error(`Node type ${node.type} does not support paragraphSpacing (expected TEXT node)`);
-      }
-      if (variable.resolvedType !== 'FLOAT') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with paragraphSpacing (expected FLOAT)`);
-      }
-
-      await node.loadAsync();
-      node.setBoundVariable('paragraphSpacing', variable);
-
-    } else if (property === 'paragraphindent' || property === 'paragraph_indent') {
-      if (node.type !== 'TEXT') {
-        throw new Error(`Node type ${node.type} does not support paragraphIndent (expected TEXT node)`);
-      }
-      if (variable.resolvedType !== 'FLOAT') {
-        throw new Error(`Variable type ${variable.resolvedType} is not compatible with paragraphIndent (expected FLOAT)`);
-      }
-
-      await node.loadAsync();
-      node.setBoundVariable('paragraphIndent', variable);
-
-    } else {
-      throw new Error(`Unsupported property: ${params.property}. Supported properties: fills, strokes, width, height, cornerRadius, itemSpacing, opacity, rotation, paddingTop, paddingRight, paddingBottom, paddingLeft, characters, fontFamily, fontStyle, fontWeight, fontSize, lineHeight, letterSpacing, paragraphSpacing, paragraphIndent`);
-    }
-
-    return {
-      success: true,
-      message: `Successfully applied variable "${variable.name}" to ${property} of node "${node.name}"`,
-      nodeId: node.id,
-      nodeName: node.name,
-      variableId: variable.id,
-      variableName: variable.name,
-      property: property
-    };
-
-  } catch (error) {
-    return {
-      success: false,
-      message: `Error applying variable to node: ${error.message}`,
-      error: error.message
-    };
+// Create a table
+async function createTable(params) {
+  if (!params || !params.numRows || !params.numColumns) {
+    throw new Error("Missing numRows or numColumns parameter");
   }
+
+  // Check if this is a FigJam file
+  if (figma.editorType !== 'figjam') {
+    throw new Error("createTable is only available in FigJam files");
+  }
+
+  const table = figma.createTable(params.numRows, params.numColumns);
+  
+  // Set position
+  table.x = params.x !== undefined ? params.x : figma.viewport.center.x;
+  table.y = params.y !== undefined ? params.y : figma.viewport.center.y;
+  
+  // Set cell contents if provided
+  if (params.cellContents && Array.isArray(params.cellContents)) {
+    for (const cellData of params.cellContents) {
+      if (cellData.row < params.numRows && cellData.column < params.numColumns) {
+        const cell = table.cellAt(cellData.row, cellData.column);
+        if (cell && cell.text) {
+          await figma.loadFontAsync(cell.text.fontName);
+          cell.text.characters = cellData.text;
+        }
+      }
+    }
+  }
+  
+  // Add to parent if specified
+  if (params.parentId) {
+    const parent = await figma.getNodeByIdAsync(params.parentId);
+    if (parent && 'appendChild' in parent) {
+      parent.appendChild(table);
+    }
+  }
+  
+  // Select and scroll to the table
+  figma.currentPage.selection = [table];
+  figma.viewport.scrollAndZoomIntoView([table]);
+
+  return {
+    success: true,
+    id: table.id,
+    name: table.name,
+    numRows: table.numRows,
+    numColumns: table.numColumns,
+    x: table.x,
+    y: table.y
+  };
 }
 
-/**
- * Apply variables to multiple nodes
- * @param {Object} params - Parameters for applying variables
- * @param {Array} params.applications - Array of application objects
- * @param {string} params.applications[].nodeId - ID of the node
- * @param {string} params.applications[].variableId - ID of the variable
- * @param {string} params.applications[].property - Property to bind
- * @param {number} [params.applications[].fieldIndex] - Optional field index
- * @returns {Object} Object containing success status and results for each application
- */
-async function applyVariablesToNodes(params) {
-  try {
-    if (!params.applications || !Array.isArray(params.applications)) {
-      throw new Error("Missing or invalid required parameter: applications (must be an array)");
-    }
-
-    if (params.applications.length === 0) {
-      throw new Error("applications array cannot be empty");
-    }
-
-    const results = [];
-    let successCount = 0;
-    let failureCount = 0;
-
-    for (const application of params.applications) {
-      const result = await applyVariableToNode(application);
-      results.push(result);
-
-      if (result.success) {
-        successCount++;
-      } else {
-        failureCount++;
-      }
-    }
-
-    return {
-      success: failureCount === 0,
-      message: `Applied variables: ${successCount} succeeded, ${failureCount} failed`,
-      totalCount: params.applications.length,
-      successCount: successCount,
-      failureCount: failureCount,
-      results: results
-    };
-
-  } catch (error) {
-    return {
-      success: false,
-      message: `Error applying variables to nodes: ${error.message}`,
-      error: error.message
-    };
+// Set table cell content
+async function setTableCellContent(params) {
+  if (!params || !params.tableId) {
+    throw new Error("Missing tableId parameter");
   }
+  if (params.row === undefined || params.column === undefined) {
+    throw new Error("Missing row or column parameter");
+  }
+  if (!params.text) {
+    throw new Error("Missing text parameter");
+  }
+
+  const table = await figma.getNodeByIdAsync(params.tableId);
+  if (!table || table.type !== 'TABLE') {
+    throw new Error(`Node ${params.tableId} is not a table or does not exist`);
+  }
+
+  const cell = table.cellAt(params.row, params.column);
+  if (!cell) {
+    throw new Error(`Cell at row ${params.row}, column ${params.column} does not exist`);
+  }
+
+  await figma.loadFontAsync(cell.text.fontName);
+  cell.text.characters = params.text;
+
+  return {
+    success: true,
+    tableId: table.id,
+    row: params.row,
+    column: params.column,
+    text: params.text
+  };
+}
+
+// FigJam Timer functions
+async function startFigJamTimer(params) {
+  if (!params || !params.seconds) {
+    throw new Error("Missing seconds parameter");
+  }
+
+  // Check if this is a FigJam file
+  if (figma.editorType !== 'figjam') {
+    throw new Error("Timer is only available in FigJam files");
+  }
+
+  figma.timer.start(params.seconds);
+  
+  return {
+    success: true,
+    state: figma.timer.state,
+    remaining: figma.timer.remaining,
+    total: figma.timer.total,
+    message: `Timer started for ${params.seconds} seconds`
+  };
+}
+
+async function pauseFigJamTimer() {
+  // Check if this is a FigJam file
+  if (figma.editorType !== 'figjam') {
+    throw new Error("Timer is only available in FigJam files");
+  }
+
+  if (figma.timer.state !== 'RUNNING') {
+    throw new Error("Timer is not running");
+  }
+
+  figma.timer.pause();
+  
+  return {
+    success: true,
+    state: figma.timer.state,
+    remaining: figma.timer.remaining,
+    message: "Timer paused"
+  };
+}
+
+async function resumeFigJamTimer() {
+  // Check if this is a FigJam file
+  if (figma.editorType !== 'figjam') {
+    throw new Error("Timer is only available in FigJam files");
+  }
+
+  if (figma.timer.state !== 'PAUSED') {
+    throw new Error("Timer is not paused");
+  }
+
+  figma.timer.resume();
+  
+  return {
+    success: true,
+    state: figma.timer.state,
+    remaining: figma.timer.remaining,
+    message: "Timer resumed"
+  };
+}
+
+async function stopFigJamTimer() {
+  // Check if this is a FigJam file
+  if (figma.editorType !== 'figjam') {
+    throw new Error("Timer is only available in FigJam files");
+  }
+
+  figma.timer.stop();
+  
+  return {
+    success: true,
+    state: figma.timer.state,
+    message: "Timer stopped"
+  };
+}
+
+async function getFigJamTimer() {
+  // Check if this is a FigJam file
+  if (figma.editorType !== 'figjam') {
+    throw new Error("Timer is only available in FigJam files");
+  }
+
+  return {
+    success: true,
+    state: figma.timer.state,
+    remaining: figma.timer.remaining,
+    total: figma.timer.total
+  };
+}
+
+// Get stamp info (stamps are read-only via API)
+async function getStampInfo(params) {
+  if (!params || !params.nodeId) {
+    throw new Error("Missing nodeId parameter");
+  }
+
+  const node = await figma.getNodeByIdAsync(params.nodeId);
+  if (!node) {
+    throw new Error(`Node ${params.nodeId} not found`);
+  }
+  
+  if (node.type !== 'STAMP') {
+    throw new Error(`Node ${params.nodeId} is not a stamp (type: ${node.type})`);
+  }
+
+  return {
+    success: true,
+    id: node.id,
+    name: node.name,
+    type: node.type,
+    x: node.x,
+    y: node.y,
+    width: node.width,
+    height: node.height
+  };
+}
+
+// Get FigJam file info
+async function getFigJamInfo() {
+  const isFigJam = figma.editorType === 'figjam';
+  
+  return {
+    success: true,
+    isFigJam: isFigJam,
+    editorType: figma.editorType,
+    availableFeatures: isFigJam ? [
+      'createSticky',
+      'createShapeWithText',
+      'createConnector',
+      'createCodeBlock',
+      'createTable',
+      'timer',
+      'stamps (read-only)',
+      'widgets (read-only)'
+    ] : [],
+    message: isFigJam 
+      ? "This is a FigJam file with full FigJam feature support"
+      : "This is not a FigJam file. FigJam-specific features are not available."
+  };
 }

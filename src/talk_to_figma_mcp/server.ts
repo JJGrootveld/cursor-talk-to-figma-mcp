@@ -524,109 +524,6 @@ server.tool(
   }
 );
 
-// Create Section Tool
-server.tool(
-  "create_section",
-  "Create a new section in Figma. Sections are organizational containers that can only be direct children of a page.",
-  {
-    x: z.number().describe("X position"),
-    y: z.number().describe("Y position"),
-    width: z.number().describe("Width of the section"),
-    height: z.number().describe("Height of the section"),
-    name: z.string().optional().describe("Optional name for the section"),
-    fillColor: z
-      .object({
-        r: z.number().min(0).max(1).describe("Red component (0-1)"),
-        g: z.number().min(0).max(1).describe("Green component (0-1)"),
-        b: z.number().min(0).max(1).describe("Blue component (0-1)"),
-        a: z
-          .number()
-          .min(0)
-          .max(1)
-          .optional()
-          .describe("Alpha component (0-1)"),
-      })
-      .optional()
-      .describe("Fill color in RGBA format"),
-  },
-  async ({ x, y, width, height, name, fillColor }: any) => {
-    try {
-      const result = await sendCommandToFigma("create_section", {
-        x,
-        y,
-        width,
-        height,
-        name: name || "Section",
-        fillColor,
-      });
-      const typedResult = result as { name: string; id: string };
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Created section "${typedResult.name}" with ID: ${typedResult.id}. Sections can contain frames and other elements.`,
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error creating section: ${error instanceof Error ? error.message : String(error)
-              }`,
-          },
-        ],
-      };
-    }
-  }
-);
-
-// Append Child Tool
-server.tool(
-  "append_child",
-  "Move a node to become a child of another node (reparenting). Useful for moving nodes into sections or frames. Supported parent types: SectionNode, FrameNode, ComponentNode, GroupNode, and other container nodes.",
-  {
-    parentId: z.string().describe("The ID of the parent node to move the child into"),
-    childId: z.string().describe("The ID of the child node to move"),
-  },
-  async ({ parentId, childId }: any) => {
-    try {
-      const result = await sendCommandToFigma("append_child", {
-        parentId,
-        childId,
-      });
-      const typedResult = result as {
-        success: boolean;
-        parentId: string;
-        parentName: string;
-        parentType: string;
-        childId: string;
-        childName: string;
-        childType: string;
-      };
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Moved "${typedResult.childName}" (${typedResult.childType}) into "${typedResult.parentName}" (${typedResult.parentType})`,
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error appending child: ${error instanceof Error ? error.message : String(error)
-              }`,
-          },
-        ],
-      };
-    }
-  }
-);
-
 // Create Text Tool
 server.tool(
   "create_text",
@@ -2709,6 +2606,538 @@ This detailed process ensures you correctly interpret the reaction data, prepare
   }
 );
 
+// =====================================================
+// FigJam-Specific Tools
+// =====================================================
+
+// Create Sticky Note Tool
+server.tool(
+  "create_sticky",
+  "Create a sticky note in FigJam. Stickies are collaborative notes that can be placed on the canvas.",
+  {
+    text: z.string().describe("Text content of the sticky note"),
+    x: z.number().optional().describe("X position (defaults to viewport center)"),
+    y: z.number().optional().describe("Y position (defaults to viewport center)"),
+    color: z
+      .enum(["YELLOW", "ORANGE", "RED", "PINK", "VIOLET", "BLUE", "TEAL", "GREEN", "GRAY"])
+      .optional()
+      .describe("Sticky note color. Defaults to YELLOW."),
+    authorVisible: z.boolean().optional().describe("Whether to show the author name on the sticky"),
+    isWideWidth: z.boolean().optional().describe("Whether to use wide rectangular shape instead of square"),
+    parentId: z.string().optional().describe("Optional parent section/frame ID to add the sticky to"),
+  },
+  async ({ text, x, y, color, authorVisible, isWideWidth, parentId }: any) => {
+    try {
+      const result = await sendCommandToFigma("create_sticky", {
+        text,
+        x,
+        y,
+        color,
+        authorVisible,
+        isWideWidth,
+        parentId,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error creating sticky: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Create Shape With Text Tool
+server.tool(
+  "create_shape_with_text",
+  "Create a shape with text in FigJam. Useful for flowcharts, diagrams, and decision trees.",
+  {
+    shapeType: z
+      .enum([
+        "SQUARE",
+        "ELLIPSE",
+        "ROUNDED_RECTANGLE",
+        "DIAMOND",
+        "TRIANGLE_UP",
+        "TRIANGLE_DOWN",
+        "PARALLELOGRAM_RIGHT",
+        "PARALLELOGRAM_LEFT",
+        "ENG_DATABASE",
+        "ENG_QUEUE",
+        "ENG_FILE",
+        "ENG_FOLDER",
+      ])
+      .describe("Type of shape to create"),
+    text: z.string().optional().describe("Text content inside the shape"),
+    x: z.number().optional().describe("X position"),
+    y: z.number().optional().describe("Y position"),
+    fillColor: z
+      .object({
+        r: z.number().min(0).max(1).describe("Red component (0-1)"),
+        g: z.number().min(0).max(1).describe("Green component (0-1)"),
+        b: z.number().min(0).max(1).describe("Blue component (0-1)"),
+      })
+      .optional()
+      .describe("Fill color in RGB format"),
+    parentId: z.string().optional().describe("Optional parent node ID"),
+  },
+  async ({ shapeType, text, x, y, fillColor, parentId }: any) => {
+    try {
+      const result = await sendCommandToFigma("create_shape_with_text", {
+        shapeType,
+        text,
+        x,
+        y,
+        fillColor,
+        parentId,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error creating shape with text: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Create Connector Tool
+server.tool(
+  "create_connector",
+  "Create a connector line between nodes in FigJam. Useful for connecting shapes, stickies, and other elements.",
+  {
+    startNodeId: z.string().optional().describe("ID of the node to connect from"),
+    endNodeId: z.string().optional().describe("ID of the node to connect to"),
+    startMagnet: z
+      .enum(["AUTO", "TOP", "BOTTOM", "LEFT", "RIGHT"])
+      .optional()
+      .describe("Where on the start node to attach the connector"),
+    endMagnet: z
+      .enum(["AUTO", "TOP", "BOTTOM", "LEFT", "RIGHT"])
+      .optional()
+      .describe("Where on the end node to attach the connector"),
+    connectorType: z
+      .enum(["ELBOWED", "STRAIGHT"])
+      .optional()
+      .describe("Type of connector line"),
+    strokeColor: z
+      .object({
+        r: z.number().min(0).max(1).describe("Red component (0-1)"),
+        g: z.number().min(0).max(1).describe("Green component (0-1)"),
+        b: z.number().min(0).max(1).describe("Blue component (0-1)"),
+      })
+      .optional()
+      .describe("Stroke color in RGB format"),
+    strokeWeight: z.number().optional().describe("Stroke weight"),
+    text: z.string().optional().describe("Text label on the connector"),
+  },
+  async ({ startNodeId, endNodeId, startMagnet, endMagnet, connectorType, strokeColor, strokeWeight, text }: any) => {
+    try {
+      const result = await sendCommandToFigma("create_connector", {
+        startNodeId,
+        endNodeId,
+        startMagnet,
+        endMagnet,
+        connectorType,
+        strokeColor,
+        strokeWeight,
+        text,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error creating connector: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Create Code Block Tool
+server.tool(
+  "create_code_block",
+  "Create a code block in FigJam for displaying code snippets with syntax highlighting.",
+  {
+    code: z.string().describe("The code content to display"),
+    language: z
+      .enum([
+        "TYPESCRIPT",
+        "JAVASCRIPT",
+        "PYTHON",
+        "RUBY",
+        "CSS",
+        "HTML",
+        "JSON",
+        "CPP",
+        "JAVA",
+        "SWIFT",
+        "KOTLIN",
+        "BASH",
+        "PLAINTEXT",
+      ])
+      .optional()
+      .describe("Programming language for syntax highlighting"),
+    x: z.number().optional().describe("X position"),
+    y: z.number().optional().describe("Y position"),
+    parentId: z.string().optional().describe("Optional parent node ID"),
+  },
+  async ({ code, language, x, y, parentId }: any) => {
+    try {
+      const result = await sendCommandToFigma("create_code_block", {
+        code,
+        language,
+        x,
+        y,
+        parentId,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error creating code block: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Create Table Tool
+server.tool(
+  "create_table",
+  "Create a table in FigJam with specified rows and columns.",
+  {
+    numRows: z.number().min(1).max(100).describe("Number of rows (1-100)"),
+    numColumns: z.number().min(1).max(100).describe("Number of columns (1-100)"),
+    x: z.number().optional().describe("X position"),
+    y: z.number().optional().describe("Y position"),
+    cellContents: z
+      .array(
+        z.object({
+          row: z.number().describe("Row index (0-based)"),
+          column: z.number().describe("Column index (0-based)"),
+          text: z.string().describe("Cell text content"),
+        })
+      )
+      .optional()
+      .describe("Optional initial cell contents"),
+    parentId: z.string().optional().describe("Optional parent node ID"),
+  },
+  async ({ numRows, numColumns, x, y, cellContents, parentId }: any) => {
+    try {
+      const result = await sendCommandToFigma("create_table", {
+        numRows,
+        numColumns,
+        x,
+        y,
+        cellContents,
+        parentId,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error creating table: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Set Table Cell Content Tool
+server.tool(
+  "set_table_cell_content",
+  "Set the content of a specific cell in a FigJam table.",
+  {
+    tableId: z.string().describe("ID of the table node"),
+    row: z.number().describe("Row index (0-based)"),
+    column: z.number().describe("Column index (0-based)"),
+    text: z.string().describe("Text content for the cell"),
+  },
+  async ({ tableId, row, column, text }: any) => {
+    try {
+      const result = await sendCommandToFigma("set_table_cell_content", {
+        tableId,
+        row,
+        column,
+        text,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error setting table cell content: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Timer Tools
+server.tool(
+  "start_figjam_timer",
+  "Start or set the FigJam timer. The timer is visible to all users in the file.",
+  {
+    seconds: z.number().min(1).max(3600).describe("Duration in seconds (1-3600, i.e., up to 1 hour)"),
+  },
+  async ({ seconds }: any) => {
+    try {
+      const result = await sendCommandToFigma("start_figjam_timer", { seconds });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error starting timer: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+server.tool(
+  "pause_figjam_timer",
+  "Pause the currently running FigJam timer.",
+  {},
+  async () => {
+    try {
+      const result = await sendCommandToFigma("pause_figjam_timer", {});
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error pausing timer: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+server.tool(
+  "resume_figjam_timer",
+  "Resume a paused FigJam timer.",
+  {},
+  async () => {
+    try {
+      const result = await sendCommandToFigma("resume_figjam_timer", {});
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error resuming timer: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+server.tool(
+  "stop_figjam_timer",
+  "Stop and reset the FigJam timer.",
+  {},
+  async () => {
+    try {
+      const result = await sendCommandToFigma("stop_figjam_timer", {});
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error stopping timer: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+server.tool(
+  "get_figjam_timer",
+  "Get the current state of the FigJam timer.",
+  {},
+  async () => {
+    try {
+      const result = await sendCommandToFigma("get_figjam_timer", {});
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error getting timer state: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Stamp Tool (read/modify only - stamps cannot be created via API)
+server.tool(
+  "get_stamp_info",
+  "Get information about a stamp node in FigJam. Stamps are reactions/emoji that users can place.",
+  {
+    nodeId: z.string().describe("ID of the stamp node"),
+  },
+  async ({ nodeId }: any) => {
+    try {
+      const result = await sendCommandToFigma("get_stamp_info", { nodeId });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error getting stamp info: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Get FigJam Info Tool
+server.tool(
+  "get_figjam_info",
+  "Get information about whether the current file is a FigJam file and available FigJam features.",
+  {},
+  async () => {
+    try {
+      const result = await sendCommandToFigma("get_figjam_info", {});
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error getting FigJam info: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
 
 // Define command types and parameters
 type FigmaCommand =
@@ -2719,8 +3148,6 @@ type FigmaCommand =
   | "read_my_design"
   | "create_rectangle"
   | "create_frame"
-  | "create_section"
-  | "append_child"
   | "create_text"
   | "set_fill_color"
   | "set_stroke_color"
@@ -2730,10 +3157,6 @@ type FigmaCommand =
   | "delete_multiple_nodes"
   | "get_styles"
   | "get_local_components"
-  | "get_local_variables"
-  | "get_local_variable_collections"
-  | "apply_variable_to_node"
-  | "apply_variables_to_nodes"
   | "create_component_instance"
   | "get_instance_overrides"
   | "set_instance_overrides"
@@ -2757,7 +3180,21 @@ type FigmaCommand =
   | "set_default_connector"
   | "create_connections"
   | "set_focus"
-  | "set_selections";
+  | "set_selections"
+  // FigJam-specific commands
+  | "create_sticky"
+  | "create_shape_with_text"
+  | "create_connector"
+  | "create_code_block"
+  | "create_table"
+  | "set_table_cell_content"
+  | "start_figjam_timer"
+  | "pause_figjam_timer"
+  | "resume_figjam_timer"
+  | "stop_figjam_timer"
+  | "get_figjam_timer"
+  | "get_stamp_info"
+  | "get_figjam_info";
 
 type CommandParams = {
   get_document_info: Record<string, never>;
@@ -2782,18 +3219,6 @@ type CommandParams = {
     fillColor?: { r: number; g: number; b: number; a?: number };
     strokeColor?: { r: number; g: number; b: number; a?: number };
     strokeWeight?: number;
-  };
-  create_section: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    name?: string;
-    fillColor?: { r: number; g: number; b: number; a?: number };
-  };
-  append_child: {
-    parentId: string;
-    childId: string;
   };
   create_text: {
     x: number;
@@ -3191,141 +3616,6 @@ server.tool(
             type: "text",
             text: `Error joining channel: ${error instanceof Error ? error.message : String(error)
               }`,
-          },
-        ],
-      };
-    }
-  }
-);
-
-// Get Local Variables Tool
-server.tool(
-  "get_local_variables",
-  "Get all local variables from the current Figma file, optionally filtered by type",
-  {
-    type: z.enum(["BOOLEAN", "FLOAT", "STRING", "COLOR"]).optional().describe("Optional filter by variable type (BOOLEAN, FLOAT, STRING, COLOR)"),
-  },
-  async ({ type }: any) => {
-    try {
-      const params = type ? { type } : {};
-      const result = await sendCommandToFigma("get_local_variables", params);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result, null, 2)
-          }
-        ]
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error getting local variables: ${error instanceof Error ? error.message : String(error)}`,
-          },
-        ],
-      };
-    }
-  }
-);
-
-// Get Local Variable Collections Tool
-server.tool(
-  "get_local_variable_collections",
-  "Get all local variable collections from the current Figma file",
-  {},
-  async () => {
-    try {
-      const result = await sendCommandToFigma("get_local_variable_collections");
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result, null, 2)
-          }
-        ]
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error getting variable collections: ${error instanceof Error ? error.message : String(error)}`,
-          },
-        ],
-      };
-    }
-  }
-);
-
-// Apply Variable to Node Tool
-server.tool(
-  "apply_variable_to_node",
-  "Apply a variable to a specific property of a node in Figma",
-  {
-    nodeId: z.string().describe("The ID of the node to apply the variable to"),
-    variableId: z.string().describe("The ID of the variable to apply"),
-    property: z.string().describe("The property to bind the variable to. Supported properties: fills, strokes, width, height, cornerRadius, itemSpacing, opacity, rotation, paddingTop, paddingRight, paddingBottom, paddingLeft, characters, fontFamily, fontStyle, fontWeight, fontSize, lineHeight, letterSpacing, paragraphSpacing, paragraphIndent"),
-    fieldIndex: z.number().optional().describe("Optional index for array properties like fills/strokes (default: 0)"),
-  },
-  async ({ nodeId, variableId, property, fieldIndex }: any) => {
-    try {
-      const params: any = { nodeId, variableId, property };
-      if (fieldIndex !== undefined) {
-        params.fieldIndex = fieldIndex;
-      }
-      const result = await sendCommandToFigma("apply_variable_to_node", params);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result, null, 2)
-          }
-        ]
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error applying variable to node: ${error instanceof Error ? error.message : String(error)}`,
-          },
-        ],
-      };
-    }
-  }
-);
-
-// Apply Variables to Multiple Nodes Tool
-server.tool(
-  "apply_variables_to_nodes",
-  "Apply variables to multiple nodes in Figma",
-  {
-    applications: z.array(z.object({
-      nodeId: z.string().describe("The ID of the node"),
-      variableId: z.string().describe("The ID of the variable"),
-      property: z.string().describe("The property to bind the variable to"),
-      fieldIndex: z.number().optional().describe("Optional field index for array properties"),
-    })).describe("Array of variable applications, each specifying nodeId, variableId, property, and optionally fieldIndex"),
-  },
-  async ({ applications }: any) => {
-    try {
-      const result = await sendCommandToFigma("apply_variables_to_nodes", { applications });
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result, null, 2)
-          }
-        ]
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error applying variables to nodes: ${error instanceof Error ? error.message : String(error)}`,
           },
         ],
       };
